@@ -25,12 +25,13 @@ import sys
 
 VHD_SECTOR_SIZE = 512
 
-libvhd_handle = ctypes.CDLL(ctypes.util.find_library("vhd"), use_errno=True)
+libvhd_handle = ctypes.cdll.LoadLibrary("libvhd.so")
+
 
 VHD_DISK_TYPES = {
         'fixed': 2,
         'dynamic': 3,
-        'differenciating': 4}
+        'differencing': 4}
 
 VHD_OPEN_FLAGS = {
         'rdonly': 0x00000001,
@@ -60,6 +61,10 @@ class VHDWriteError(VHDException):
     pass
 
 
+class VHDReadError(VHDException):
+    pass
+
+
 class VHDOpenFailure(VHDException):
     pass
 
@@ -78,6 +83,14 @@ class BufferInvalidOffset(BufferFailure):
 
 class BufferInvalidSize(BufferFailure):
     pass
+
+
+class ListHead(ctypes.Structure):
+    pass
+
+ListHead._fields_ = [
+            ('next', ctypes.POINTER(ListHead)),
+            ('prev', ctypes.POINTER(ListHead))]
 
 
 class VHDPrtLoc(ctypes.Structure):
@@ -160,7 +173,9 @@ class VHDContext(ctypes.Structure):
             ('header', VHDHeader),
             ('footer', VHDFooter),
             ('bat', VHDBat),
-            ('batmap', VHDBatMap)]
+            ('batmap', VHDBatMap),
+            ('next', ListHead),
+            ('custom_parent', ctypes.c_char_p)]
 
 
 class AlignedBuffer(object):
@@ -224,9 +239,28 @@ class VHD(object):
         self.filename = filename
         self.open_flags = flags
         self.vhd_context = VHDContext()
-        ret = _call('vhd_open',
-                ctypes.pointer(self.vhd_context),
-                ctypes.c_char_p(filename), ctypes.c_int(open_flags))
+
+        # setattr(self.vhd_context, "header", VHDHeader())
+        # print("Set header...")
+        # setattr(self.vhd_context, "footer", VHDFooter())
+        # print("Set footer...")
+        # setattr(self.vhd_context, "bat", VHDBat())
+        # setattr(self.vhd_context, "batmap", VHDBatMap())
+
+        print("VHD_ctx: %s" % str(self.vhd_context.header))
+
+        print("Opening: %s " % filename)
+        vhd_open = libvhd_handle.vhd_open
+        vhd_open.argtypes = [ctypes.POINTER(VHDContext), ctypes.c_char_p,
+                             ctypes.c_int]
+
+        print("F: %s" % str(vhd_open))
+
+        ret = vhd_open(ctypes.byref(self.vhd_context), filename, open_flags)
+
+        # ret = _call('vhd_open',
+        #         ctypes.pointer(self.vhd_context),
+        #         ctypes.c_char_p(filename), ctypes.c_int(open_flags))
         if ret:
             raise VHDOpenFailure("Error opening: %s" % ctypes.get_errno())
         self._closed = False
@@ -250,6 +284,14 @@ class VHD(object):
         for field, _ in footer._fields_:
             ftr[field] = getattr(footer, field)
         return ftr
+
+    def get_header(self):
+        """Get the VHD header data."""
+        hdr = {}
+        header = self.vhd_context.header
+        for field, _ in header._fields_:
+            hdr[field] = getattr(header, field)
+        return hdr
 
     def io_write(self, buf, cur_sec, num_secs):
         """Write sectors from an aligned buffer into a VHD."""
