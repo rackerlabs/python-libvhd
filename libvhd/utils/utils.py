@@ -17,6 +17,15 @@
 
 import ctypes
 from libvhd.utils import exceptions
+import uuid
+
+_libvhd_handle = None
+
+def _get_libvhd_handle():
+    global _libvhd_handle
+    if _libvhd_handle is None:
+        _libvhd_handle = ctypes.cdll.LoadLibrary("libvhd.so")
+    return _libvhd_handle
 
 
 class AlignedBuffer(object):
@@ -75,3 +84,16 @@ class AlignedBuffer(object):
         """
         p = self.get_pointer(offset=offset, size=size)
         return p.contents.raw
+
+
+def _call(fn_name, *args):
+    """Call a function in libvhd.so"""
+    libvhd_handle =_get_libvhd_handle()
+    fn = getattr(libvhd_handle, fn_name)
+    return fn(*args)
+
+def uuid_unparse(uuid_t):
+    """Convert raw bytes from uuid_t to a formatted string.
+    uuid_t must be an array of 16 c_char"""
+    data = [str.format("%x" % ord(c)) for c in uuid_t]
+    return uuid.UUID("".join(data))
