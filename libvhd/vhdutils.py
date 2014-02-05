@@ -19,6 +19,34 @@
 import ctypes
 import utils.exceptions as exceptions
 from utils.utils import _call
+from libvhd import ListHead
+
+
+class VHDUtilCheckOptions(ctypes.Structure):
+    _fields_ = [
+        ('ignore_footer', ctypes.c_char),
+        ('ignore_parent_uuid', ctypes.c_char),
+        ('ignore_timestamps', ctypes.c_char),
+        ('check_data', ctypes.c_char),
+        ('no_check_bat', ctypes.c_char),
+        ('collect_stats', ctypes.c_char)]
+
+
+class VHDUtilCheckStats(ctypes.Structure):
+    _fields_ = [
+        ('name', ctypes.c_char_p),
+        ('bitmap', ctypes.c_char_p),
+        ('secs_total', ctypes.c_uint64),
+        ('secs_allocated', ctypes.c_uint64),
+        ('secs_written', ctypes.c_uint64),
+        ('next', ListHead)]
+
+
+class VHDUtilCheckCtx(ctypes.Structure):
+    _fields_ = [
+        ('opts', VHDUtilCheckOptions),
+        ('stats', ListHead),
+        ('primary_footer_missing', ctypes.c_int)]
 
 
 def coalesce(name, output=None, ancestor=None, step_parent=None, sparse=False):
@@ -58,5 +86,50 @@ def coalesce(name, output=None, ancestor=None, step_parent=None, sparse=False):
                     ctypes.c_char_p(name), ctypes.c_int(sparse_i),
                     ctypes.c_int(0), ctypes.c_char_p(step_parent))
 
-    if ret and (ret.value != 0):
+    if ret != 0:
         raise exceptions.VHDUtilCoalesceError(errcode=ret.value)
+
+def _set_bool_opt(obj, attr, bool_val):
+    val = 1 if bool_val else 0
+    setattr(obj, attr, ctypes.c_char(chr(val)))
+
+def check(name, ignore_missing_primary_footers=False, ignore_parent_uuids=False,
+          ignore_timestamps=False, skip_bat_overlap_check=False,
+          check_parents=False, check_bitmaps=False):
+
+    if name is None:
+        raise exceptions.VHDUtilMissingArgument("'name' must be specified")
+
+    if skip_bat_overlap_check and check_bitmaps:
+        raise exceptions.VHDUtilMutuallyExclusiveArguments(
+            "Cannot specify 'check_bitmaps' as True when "
+            "'no_bat_overlap_check' is also True")
+
+    o = VHDUtilCheckOptions()
+    _set_bool_opt(o, 'ignore_footer', ignore_missing_primary_footers)
+    _set_bool_opt(o, 'ignore_parent_uuid', ignore_parent_uuids)
+    _set_bool_opt(o, 'ignore_timestamps', ignore_timestamps)
+    _set_bool_opt(o, 'check_data', check_bitmaps)
+    _set_bool_opt(o, 'no_check_bat', skip_bat_overlap_check)
+    _set_bool_opt(o, 'collect_stats', False)
+
+    list_head = ListHead()
+    setattr(list_head, 'next', ctypes.pointer(list_head))
+    setattr(list_head, 'prev', ctypes.pointer(list_head))
+
+    vhd_check_ctx = VHDUtilCheckCtx()
+    setattr(vhd_check_ctx, 'opts', o)
+    setattr(vhd_check_ctx, 'stats', list_head)
+
+    ret = _call('vhd_util_check_vhd',
+                ctypes.pointer(vhd_check_ctx),
+                ctypes.c_char_p(name))
+
+    if ret == 0:
+        if check_parents:
+            ret = _call('vhd_util_check_parents',
+                        ctypes.pointer(vhd_check_ctx),
+                        ctypes.c_char_p(name))
+
+    if ret != 0:
+        raise exceptions.VHDUtilCheckError(errcode=ret.value)
